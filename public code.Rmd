@@ -1,0 +1,1706 @@
+---
+title: "Uvira coverage public code"
+output: html_notebook
+---
+
+```{r import}
+
+library(tidyverse)
+library(here)
+library(rio)
+library(dplyr)
+library(formattable)
+library(flextable)
+library(janitor)
+library(stringr)
+library(lubridate)
+library(cowplot)
+library(tidyr)
+library(epikit)
+library(devtools)
+library(uvira.data.access)
+
+master <- import(here("data", "clean_data", "coverage_clean.rds"))
+
+r1 <- master %>% filter(round==1)
+r2 <- master %>% filter(round==2)
+r3 <- master %>% filter(round==3)
+
+```
+
+```{r, wealth}
+##  Creating wealth index
+master <- master %>% dplyr::mutate(identifiant= sequence(nrow(.)))%>%dplyr::mutate(
+  
+              own_phone = if_else(grepl("cellphone", cat_items, ignore.case = TRUE)==TRUE, 1, 0),
+              own_computer = if_else(grepl("computer", cat_items, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_radio = if_else(grepl("radio", cat_items, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_television = if_else(grepl("television", cat_items, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_satellite_dish = if_else(grepl("satellite_dish", cat_items, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_refrigerator = if_else(grepl("refrigerator", cat_items, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_chicken = if_else(grepl("chicken", cat_livestock, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_duck = if_else(grepl("duck", cat_livestock, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_pig = if_else(grepl("pig", cat_livestock, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_goat = if_else(grepl("goat", cat_livestock, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_cattle = if_else(grepl("cattle", cat_livestock, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_bicycle = if_else(grepl("bicycle", cat_transportation, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_boat_no_motor = if_else(grepl("boat_no_motor", cat_transportation, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_motorbike = if_else(grepl("motorbike", cat_transportation, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_car = if_else(grepl("car", cat_transportation, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_boat_motor = if_else(grepl("boat_motor", cat_transportation, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_electricity = if_else(grepl("snel|solar_panel", cat_electricity, ignore.case = TRUE) ==TRUE, 1, 0),
+              own_wallmaterial = if_else(grepl("Brick|Cement", cat_wallmaterial, ignore.case = TRUE)==TRUE, 1, 0),
+              own_floormaterial = if_else(grepl("Cement|tile", cat_floormaterial, ignore.case=TRUE)==TRUE, 1, 0)
+       ) 
+
+library(sf)
+
+assets <- master %>% dplyr::filter(!is.na(own_electricity) & !is.na(own_wallmaterial)) %>% 
+                     dplyr::select(identifiant, own_phone, own_computer,   own_radio, own_television, 
+                                   own_satellite_dish, own_chicken, own_duck,
+                                   own_pig, own_goat, own_goat, own_bicycle, own_motorbike, 
+                                   own_boat_no_motor, own_electricity, own_wallmaterial, 
+                                   own_floormaterial) #%>% st_drop_geometry()
+
+
+## Creating wealth classes using a principal component analysis
+library(psych)
+pca<-psych::principal(assets[, 2:16], rotate="varimax", nfactors=3, covar=T, scores=TRUE)
+index=pca$scores[,1] 
+
+nlab<-c("1st (lowest)", "2nd", "3rd", "4th", "5th (highest)")
+
+# creating wealth quintiles
+wealth <- assets %>% mutate(wealth_quintile=as.factor(cut(index,breaks=5, labels=nlab))) %>% select(identifiant, wealth_quintile)
+master <- master %>% right_join(wealth, by="identifiant") 
+
+tabyl(master$wealth_quintile)
+tabyl(master$wealth_quintile) %>% adorn_percentages("col")
+tabyl(master, wealth_quintile, round)
+tabyl(master, wealth_quintile, round) %>% adorn_percentages("col")
+
+table(cut(index,5))
+
+```
+
+```{r, table1}
+
+## Sex
+tabyl(master, cat_individual_sex, show_na=FALSE) 
+tabyl(master, cat_individual_sex, show_na=FALSE) %>% adorn_percentages("col")
+tabyl(master, cat_individual_sex, round,show_na=FALSE)
+tabyl(master, cat_individual_sex, round, show_na=FALSE) %>% adorn_percentages("col")
+
+## Age at time of survey
+tabyl(master, age_cat, show_na=FALSE) 
+tabyl(master, age_cat, show_na=FALSE) %>% adorn_percentages("col")
+tabyl(master, age_cat, round, show_na=FALSE) 
+tabyl(master, age_cat, round, show_na=FALSE) %>% adorn_percentages("col")
+
+## Highest education
+tabyl(master, education_bin, show_na=FALSE)
+tabyl(master, education_bin, show_na=FALSE) %>% adorn_percentages("col")
+tabyl(master, education_bin, round, show_na=FALSE)
+tabyl(master, education_bin, round, show_na=FALSE) %>% adorn_percentages("col")
+
+```
+
+```{r, table2}
+
+## Household size
+summary(master$amt_currentindividuals)
+summary(r1$amt_currentindividuals)
+summary(r2$amt_currentindividuals)
+summary(r3$amt_currentindividuals)
+
+## Number of individuals per bedroom          
+summary(r1$bedrooms_rate)
+summary(r2$bedrooms_rate)
+summary(r3$bedrooms_rate)
+
+## Wealth quintile
+# By household
+# Count households in each wealth quintile
+wealth_quintile_counts <- master %>%
+  group_by(hh_ID) %>%
+  summarise(wealth_category = first(wealth_quintile)) %>%  # Assuming one value per household for wealth quintile
+  group_by(wealth_category) %>%
+  summarise(count = n_distinct(hh_ID))  # Count distinct households in each wealth quintile
+
+wealth_quintile_counts <- master %>% filter(round==1) %>%
+  group_by(hh_ID) %>%
+  summarise(wealth_category = first(wealth_quintile)) %>%  # Assuming one value per household for wealth quintile
+  group_by(wealth_category) %>%
+  summarise(count = n_distinct(hh_ID))  # Count distinct households in each wealth quintile
+
+wealth_quintile_counts <- master %>% filter(round==2) %>%
+  group_by(hh_ID) %>%
+  summarise(wealth_category = first(wealth_quintile)) %>%  # Assuming one value per household for wealth quintile
+  group_by(wealth_category) %>%
+  summarise(count = n_distinct(hh_ID))  # Count distinct households in each wealth quintile
+
+wealth_quintile_counts <- master %>% filter(round==3) %>%
+  group_by(hh_ID) %>%
+  summarise(wealth_category = first(wealth_quintile)) %>%  # Assuming one value per household for wealth quintile
+  group_by(wealth_category) %>%
+  summarise(count = n_distinct(hh_ID))  # Count distinct households in each wealth quintile
+
+## Drinking water
+water_counts <- r1 %>%
+  group_by(hh_ID) %>%
+  summarise(water_category = any(water_bin == "Improved")) %>%  
+  group_by(water_category) %>%  
+  summarise(count = n())  # Count households in each category
+
+water_counts <- r2 %>%
+  group_by(hh_ID) %>%
+  summarise(water_category = any(water_bin == "Improved")) %>%  
+  group_by(water_category) %>%  
+  summarise(count = n())  # Count households in each category
+
+water_counts <- r3 %>%
+  group_by(hh_ID) %>%
+  summarise(water_category = any(water_bin == "Improved")) %>%  
+  group_by(water_category) %>%  
+  summarise(count = n())  # Count households in each category
+
+## Sanitation
+toilet_counts <- r1 %>%
+  group_by(hh_ID) %>%
+  summarise(toilet_category = any(toilet_bin == "Improved")) %>%  
+  group_by(toilet_category) %>%  
+  summarise(count = n())  # Count households in each category
+
+toilet_counts <- r2 %>%
+  group_by(hh_ID) %>%
+  summarise(toilet_category = any(toilet_bin == "Improved")) %>%  
+  group_by(toilet_category) %>%  
+  summarise(count = n())  # Count households in each category
+
+toilet_counts <- r3 %>%
+  group_by(hh_ID) %>%
+  summarise(toilet_category = any(toilet_bin == "Improved")) %>%  
+  group_by(toilet_category) %>%  
+  summarise(count = n())  # Count households in each category
+  
+
+
+```
+
+```{r overall coverage}
+library(survey)
+
+## Months after 2nd dose campaign in each round
+summary(r1$time_since_months)
+summary(r2$time_since_months)
+summary(r3$time_since_months)
+
+## Converting the data frame to a survey object
+svy_ocv_r1 <- master %>% filter(round==1) %>% survey::svydesign( 
+                            id = ~hh_ID,
+                            prob=1/(n_distinct(master$hh_ID)), 
+                            data = .)
+
+svy_ocv_r2 <- master %>% filter(round==2) %>% survey::svydesign( 
+                            id = ~hh_ID,
+                            prob=1/(n_distinct(master$hh_ID)), 
+                            data = .)
+
+svy_ocv_r3 <- master %>% filter(round==3) %>% survey::svydesign( 
+                            id = ~hh_ID,
+                            prob=1/(n_distinct(master$hh_ID)), 
+                            data = .)
+
+# One dose
+coverage_one_dose_r1=svyciprop(~ n_dose1, svy_ocv_r1, na.rm = T)*100 ## coverage and 95% 
+coverage_one_dose_r2=svyciprop(~ n_dose1, svy_ocv_r2, na.rm = T)*100 ## coverage and 95% 
+coverage_one_dose_r3=svyciprop(~ n_dose1, svy_ocv_r3, na.rm = T)*100 ## coverage and 95% 
+
+# One or more doses
+coverage_oneplus_dose_r1=svyciprop(~ n_dose1plus, svy_ocv_r1, na.rm = T)*100  
+coverage_oneplus_dose_r2=svyciprop(~ n_dose1plus, svy_ocv_r2, na.rm = T)*100  
+coverage_oneplus_dose_r3=svyciprop(~ n_dose1plus, svy_ocv_r3, na.rm = T)*100  #
+
+# Two doses
+coverage_two_dose_r1=svyciprop(~ n_dose2, svy_ocv_r1, na.rm = T)*100 
+coverage_two_dose_r2=svyciprop(~ n_dose2, svy_ocv_r2, na.rm = T)*100 
+coverage_two_dose_r3=svyciprop(~ n_dose2, svy_ocv_r3, na.rm = T)*100 
+
+# Two or more doses
+coverage_twoplus_dose_r1=svyciprop(~ n_dose2plus, svy_ocv_r1, na.rm = T)*100 
+coverage_twoplus_dose_r2=svyciprop(~ n_dose2plus, svy_ocv_r2, na.rm = T)*100 
+coverage_twoplus_dose_r3=svyciprop(~ n_dose2plus, svy_ocv_r3, na.rm = T)*100 
+
+# Extract attributes for the svyciprop object (coverage of one dose)
+point_cov_dose1_r1 <- round(coverage_one_dose_r1[1], 1)
+lower_bound_dose1_r1 <- round(confint(coverage_one_dose_r1)[1]*100, 1)
+upper_bound_dose1_r1 <- round(confint(coverage_one_dose_r1)[2]*100, 1)
+output_cov_d1_r1 <- paste0(point_cov_dose1_r1, "%", " (", lower_bound_dose1_r1 , "–", upper_bound_dose1_r1, ")")
+
+point_cov_dose1_r2 <- round(coverage_one_dose_r2[1], 1)
+lower_bound_dose1_r2 <- round(confint(coverage_one_dose_r2)[1]*100, 1)
+upper_bound_dose1_r2 <- round(confint(coverage_one_dose_r2)[2]*100, 1)
+output_cov_d1_r2 <- paste0(point_cov_dose1_r2, "%", " (", lower_bound_dose1_r2 , "–", upper_bound_dose1_r2, ")")
+
+point_cov_dose1_r3 <- round(coverage_one_dose_r3[1], 1)
+lower_bound_dose1_r3 <- round(confint(coverage_one_dose_r3)[1]*100, 1)
+upper_bound_dose1_r3 <- round(confint(coverage_one_dose_r3)[2]*100, 1)
+output_cov_d1_r3 <- paste0(point_cov_dose1_r3, "%", " (", lower_bound_dose1_r3 , "–", upper_bound_dose1_r3, ")")
+
+
+# Extract attributes for the svyciprop object (coverage of at least one dose)
+point_cov_dose1plus_r1 <- round(coverage_oneplus_dose_r1[1], 1)
+lower_bound_dose1plus_r1 <- round(confint(coverage_oneplus_dose_r1)[1]*100, 1)
+upper_bound_dose1plus_r1 <- round(confint(coverage_oneplus_dose_r1)[2]*100, 1)
+output_cov_d1plus_r1 <- paste0(point_cov_dose1plus_r1, "%", " (", lower_bound_dose1plus_r1 , "–", upper_bound_dose1plus_r1, ")")
+
+point_cov_dose1plus_r2 <- round(coverage_oneplus_dose_r2[1], 1)
+lower_bound_dose1plus_r2 <- round(confint(coverage_oneplus_dose_r2)[1]*100, 1)
+upper_bound_dose1plus_r2 <- round(confint(coverage_oneplus_dose_r2)[2]*100, 1)
+output_cov_d1plus_r2 <- paste0(point_cov_dose1plus_r2, "%", " (", lower_bound_dose1plus_r2 , "–", upper_bound_dose1plus_r2, ")")
+
+point_cov_dose1plus_r3 <- round(coverage_oneplus_dose_r3[1], 1)
+lower_bound_dose1plus_r3 <- round(confint(coverage_oneplus_dose_r3)[1]*100, 1)
+upper_bound_dose1plus_r3 <- round(confint(coverage_one_dose_r3)[2]*100, 1)
+output_cov_d1plus_r3 <- paste0(point_cov_dose1plus_r3, "%", " (", lower_bound_dose1plus_r3 , "–", upper_bound_dose1plus_r3, ")")
+
+# Extract attributes for the svyciprop object (coverage of 2 doses)
+point_cov_dose2_r1 <- round(coverage_two_dose_r1[1], 1)
+lower_bound_dose2_r1 <- round(confint(coverage_two_dose_r1)[1]*100, 1)
+upper_bound_dose2_r1 <- round(confint(coverage_two_dose_r1)[2]*100, 1)
+output_cov_d2_r1 <- paste0(point_cov_dose2_r1, "%", " (", lower_bound_dose2_r1 , "–", upper_bound_dose2_r1, ")")
+
+point_cov_dose2_r2 <- round(coverage_two_dose_r2[1], 1)
+lower_bound_dose2_r2 <- round(confint(coverage_two_dose_r2)[1]*100, 1)
+upper_bound_dose2_r2 <- round(confint(coverage_two_dose_r2)[2]*100, 1)
+output_cov_d2_r2 <- paste0(point_cov_dose2_r2, "%", " (", lower_bound_dose2_r2 , "–", upper_bound_dose2_r2, ")")
+
+point_cov_dose2_r3 <- round(coverage_two_dose_r3[1], 1)
+lower_bound_dose2_r3 <- round(confint(coverage_two_dose_r3)[1]*100, 1)
+upper_bound_dose2_r3 <- round(confint(coverage_two_dose_r3)[2]*100, 1)
+output_cov_d2_r3 <- paste0(point_cov_dose2_r3, "%", " (", lower_bound_dose2_r3 , "–", upper_bound_dose2_r3, ")")
+
+# Extract attributes for the svyciprop object (coverage of 2 or more doses)
+point_cov_dose2plus_r1 <- round(coverage_twoplus_dose_r1[1], 1)
+lower_bound_dose2plus_r1 <- round(confint(coverage_twoplus_dose_r1)[1]*100, 1)
+upper_bound_dose2plus_r1 <- round(confint(coverage_twoplus_dose_r1)[2]*100, 1)
+output_cov_d2plus_r1 <- paste0(point_cov_dose2plus_r1, "%", " (", lower_bound_dose2plus_r1 , "–", upper_bound_dose2plus_r1, ")")
+
+point_cov_dose2plus_r2 <- round(coverage_twoplus_dose_r2[1], 1)
+lower_bound_dose2plus_r2 <- round(confint(coverage_twoplus_dose_r2)[1]*100, 1)
+upper_bound_dose2plus_r2 <- round(confint(coverage_twoplus_dose_r2)[2]*100, 1)
+output_cov_d2_r2plus <- paste0(point_cov_dose2plus_r2, "%", " (", lower_bound_dose2plus_r2 , "–", upper_bound_dose2plus_r2, ")")
+
+point_cov_dose2plus_r3 <- round(coverage_twoplus_dose_r3[1], 1)
+lower_bound_dose2plus_r3 <- round(confint(coverage_twoplus_dose_r3)[1]*100, 1)
+upper_bound_dose2plus_r3 <- round(confint(coverage_twoplus_dose_r3)[2]*100, 1)
+output_cov_d2plus_r3 <- paste0(point_cov_dose2plus_r3, "%", " (", lower_bound_dose2plus_r3 , "–", upper_bound_dose2plus_r3, ")")
+
+# Extract the design effect: report this in manuscript. Don't need it for 2 or more doses for now
+design_effect_dose1plus_r1=svymean(~ n_dose1plus, svy_ocv_r1, na.rm = T, deff="replace")
+design_effect_dose2_r1=svymean(~ n_dose2, svy_ocv_r1, na.rm = T,deff="replace")
+
+design_effect_dose1plus_r2=svymean(~ n_dose1plus, svy_ocv_r2, na.rm = T, deff="replace")
+design_effect_dose2_r2=svymean(~ n_dose2, svy_ocv_r2, na.rm = T,deff="replace")
+
+design_effect_dose1plus_r3=svymean(~ n_dose1plus, svy_ocv_r3, na.rm = T, deff="replace")
+design_effect_dose2_r3=svymean(~ n_dose2, svy_ocv_r3, na.rm = T,deff="replace")
+
+```
+
+```{r coverage by age and sex}
+## Coverage by age and sex
+                                                                               
+# Females
+filtered_design_fr1 <- subset(svy_ocv_r1, cat_individual_sex=="female")
+
+# Weighted counts of vaccination status by age
+counts_fr1_1plus <- svytotal(~n_dose1plus, filtered_design_fr1, na.rm = TRUE)
+counts_fr1_2plus <- svytotal(~n_dose2plus, filtered_design_fr1, na.rm = TRUE)
+
+# Weighted proportions of vaccination status by age
+props_fr1_1plus <- svyby(~n_dose1plus, ~age_cat, filtered_design_fr1, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose1plus - qnorm(0.975)*se,
+      upper_bound=  n_dose1plus + qnorm(0.975)*se,
+      gender=0,
+      round=1)
+
+props_fr1_2plus <- svyby(~n_dose2plus, ~age_cat, filtered_design_fr1, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose2plus - qnorm(0.975)*se,
+      upper_bound=  n_dose2plus + qnorm(0.975)*se,
+      gender=0,
+      round=1)
+ 
+# Males
+filtered_design_mr1 <- subset(svy_ocv_r1, cat_individual_sex=="male")
+
+# Weighted counts of vaccination status by age
+counts_mr1_1plus <- svytotal(~n_dose1plus, filtered_design_mr1, na.rm = TRUE)
+counts_mr1_2plus <- svytotal(~n_dose2plus, filtered_design_mr1, na.rm = TRUE)
+
+# Weighted proportions of vaccination status by age
+props_mr1_1plus <- svyby(~n_dose1plus, ~age_cat, filtered_design_mr1, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose1plus - qnorm(0.975)*se,
+      upper_bound=  n_dose1plus + qnorm(0.975)*se,
+      gender=1,
+      round=1) 
+                
+props_mr1_2plus <- svyby(~n_dose2plus, ~age_cat, filtered_design_mr1, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose2plus - qnorm(0.975)*se,
+      upper_bound=  n_dose2plus + qnorm(0.975)*se,
+      gender=1,
+      round=1) 
+                                                                            
+# Create a merged table for each round. Each round needs to merge data for males and females
+# Note: female=0 and male=1
+full_1plus <- rbind(props_fr1_1plus, props_mr1_1plus) %>% rename(coverage=n_dose1plus) %>% mutate(coverage_type="1plus")
+
+full_2plus <- rbind(props_fr1_2plus, props_mr1_2plus) %>% rename(coverage=n_dose2plus) %>% mutate(coverage_type="2plus")
+
+full <- rbind (full_1plus, full_2plus)
+
+# Use an ANOVA to test for differences in coverage 
+raw_cov <- master %>% filter(round==1) %>% filter(is.na(n_dose1plus)==FALSE) %>% filter(is.na(age_cat)==FALSE) 
+result_anova <- aov(n_dose1plus ~ age_cat, data = master)
+summary(result_anova)
+
+## Create a plot
+# Coverage by sex and age: include this in manuscript only for round 1
+vax.labs <- c("≥ 1 dose", "≥ 2 doses")
+names(vax.labs) <- c("1plus", "2plus")
+
+plot <-  ggplot(full, aes(x= age_cat, y=coverage*100, color=factor(gender))) + geom_point(position=position_dodge(width=0.5)) + geom_errorbar(aes(ymin=lower_bound*100, ymax=upper_bound*100), linetype="dotted", position=position_dodge(width=0.5), width=0) + xlab("Age in years during the survey") + ylab("Coverage") + guides(color = guide_legend(title = "Sex")) + theme_minimal()  + ylim(0, 80) + scale_color_discrete(labels=c("Female", "Male")) + facet_wrap(~ coverage_type, ncol = 1, labeller = labeller(coverage_type = vax.labs))
+
+plot
+
+## Calculate age-specific design effect in each round
+# Round 1 
+filtered_design_r1_1 <- subset(svy_ocv_r1, age_cat_elig3=="-1.762-0")
+filtered_design_r1_2 <- subset(svy_ocv_r1, age_cat_elig3=="1-4")
+filtered_design_r1_3 <- subset(svy_ocv_r1, age_cat_elig3=="5-9")
+filtered_design_r1_4 <- subset(svy_ocv_r1, age_cat_elig3=="10-19")
+filtered_design_r1_5 <- subset(svy_ocv_r1, age_cat_elig3=="20-34")
+filtered_design_r1_6 <- subset(svy_ocv_r1, age_cat_elig3=="35-49")
+filtered_design_r1_7 <- subset(svy_ocv_r1, age_cat_elig3=="50+")
+
+design_effect_r1_1=svymean(~ n_dose1plus, filtered_design_r1_1, na.rm = T, deff="replace")
+design_effect_r1_2=svymean(~ n_dose1plus, filtered_design_r1_2, na.rm = T, deff="replace")
+design_effect_r1_3=svymean(~ n_dose1plus, filtered_design_r1_3, na.rm = T, deff="replace")
+design_effect_r1_4=svymean(~ n_dose1plus, filtered_design_r1_4, na.rm = T, deff="replace")
+design_effect_r1_5=svymean(~ n_dose1plus, filtered_design_r1_5, na.rm = T, deff="replace")
+design_effect_r1_6=svymean(~ n_dose1plus, filtered_design_r1_6, na.rm = T, deff="replace")
+design_effect_r1_7=svymean(~ n_dose1plus, filtered_design_r1_7, na.rm = T, deff="replace")
+
+
+# Round 2 
+filtered_design_r2_1 <- subset(svy_ocv_r2, age_cat_elig3=="-1.762-0")
+filtered_design_r2_2 <- subset(svy_ocv_r2, age_cat_elig3=="1-4")
+filtered_design_r2_3 <- subset(svy_ocv_r2, age_cat_elig3=="5-9")
+filtered_design_r2_4 <- subset(svy_ocv_r2, age_cat_elig3=="10-19")
+filtered_design_r2_5 <- subset(svy_ocv_r2, age_cat_elig3=="20-34")
+filtered_design_r2_6 <- subset(svy_ocv_r2, age_cat_elig3=="35-49")
+filtered_design_r2_7 <- subset(svy_ocv_r2, age_cat_elig3=="50+")
+
+design_effect_r2_1=svymean(~ n_dose1plus, filtered_design_r2_1, na.rm = T, deff="replace")
+design_effect_r2_2=svymean(~ n_dose1plus, filtered_design_r2_2, na.rm = T, deff="replace")
+design_effect_r2_3=svymean(~ n_dose1plus, filtered_design_r2_3, na.rm = T, deff="replace")
+design_effect_r2_4=svymean(~ n_dose1plus, filtered_design_r2_4, na.rm = T, deff="replace")
+design_effect_r2_5=svymean(~ n_dose1plus, filtered_design_r2_5, na.rm = T, deff="replace")
+design_effect_r2_6=svymean(~ n_dose1plus, filtered_design_r2_6, na.rm = T, deff="replace")
+design_effect_r2_7=svymean(~ n_dose1plus, filtered_design_r2_7, na.rm = T, deff="replace")
+
+
+# Round 3 
+filtered_design_r3_1 <- subset(svy_ocv_r3, age_cat_elig3=="-1.762-0")
+filtered_design_r3_2 <- subset(svy_ocv_r3, age_cat_elig3=="1-4")
+filtered_design_r3_3 <- subset(svy_ocv_r3, age_cat_elig3=="5-9")
+filtered_design_r3_4 <- subset(svy_ocv_r3, age_cat_elig3=="10-19")
+filtered_design_r3_5 <- subset(svy_ocv_r3, age_cat_elig3=="20-34")
+filtered_design_r3_6 <- subset(svy_ocv_r3, age_cat_elig3=="35-49")
+filtered_design_r3_7 <- subset(svy_ocv_r3, age_cat_elig3=="50+")
+
+design_effect_r3_1=svymean(~ n_dose1plus, filtered_design_r3_1, na.rm = T, deff="replace")
+design_effect_r3_2=svymean(~ n_dose1plus, filtered_design_r3_2, na.rm = T, deff="replace")
+design_effect_r3_3=svymean(~ n_dose1plus, filtered_design_r3_3, na.rm = T, deff="replace")
+design_effect_r3_4=svymean(~ n_dose1plus, filtered_design_r3_4, na.rm = T, deff="replace")
+design_effect_r3_5=svymean(~ n_dose1plus, filtered_design_r3_5, na.rm = T, deff="replace")
+design_effect_r3_6=svymean(~ n_dose1plus, filtered_design_r3_6, na.rm = T, deff="replace")
+design_effect_r3_7=svymean(~ n_dose1plus, filtered_design_r3_7, na.rm = T, deff="replace")
+
+```
+
+```{r neighborhood coverage}
+## Weighted proportions of vaccination status by neighborhood
+
+# At least one dose
+props_r1_1plus_quartier <- svyby(~n_dose1plus, ~cat_quartier, svy_ocv_r1, FUN = svymean, na.rm = TRUE) %>% 
+  mutate(lower_bound= 100*(n_dose1plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose1plus + qnorm(0.975)*se)) %>% arrange(cat_quartier) %>% mutate(n_dose1plus=n_dose1plus*100)
+        
+
+props_r2_1plus_quartier <- svyby(~n_dose1plus, ~cat_quartier, svy_ocv_r2, FUN = svymean, na.rm = TRUE) %>% 
+  mutate(lower_bound= 100*(n_dose1plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose1plus + qnorm(0.975)*se)) %>% arrange(cat_quartier) %>% mutate(n_dose1plus=n_dose1plus*100)
+                                                                                
+
+props_r3_1plus_quartier <- svyby(~n_dose1plus, ~cat_quartier, svy_ocv_r3, FUN = svymean, na.rm = TRUE) %>% 
+  mutate(lower_bound= 100*(n_dose1plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose1plus + qnorm(0.975)*se)) %>% arrange(cat_quartier) %>% mutate(n_dose1plus=n_dose1plus*100)
+        
+# 2 doses
+props_r1_2plus_quartier <- svyby(~n_dose2plus, ~cat_quartier, svy_ocv_r1, FUN = svymean, na.rm = TRUE) %>%   mutate(lower_bound= 100*(n_dose2plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose2plus + qnorm(0.975)*se)) %>% arrange(cat_quartier)
+
+props_r2_2plus_quartier <- svyby(~n_dose2plus, ~cat_quartier, svy_ocv_r2, FUN = svymean, na.rm = TRUE) %>%   mutate(lower_bound= 100*(n_dose2plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose2plus + qnorm(0.975)*se)) %>% arrange(cat_quartier)
+                                                    
+
+props_r3_2plus_quartier <- svyby(~n_dose2plus, ~cat_quartier, svy_ocv_r3, FUN = svymean, na.rm = TRUE) %>%   mutate(lower_bound= 100*(n_dose2plus - qnorm(0.975)*se),
+      upper_bound=  100*(n_dose2plus + qnorm(0.975)*se)) %>% arrange(cat_quartier)
+                                                    
+                                                                                       
+```
+
+
+```{r coverage by wealth}
+# Coverage by wealth index
+
+# Exclude individuals who are not age eligible
+filtered_design_wr1 <- subset(svy_ocv_r1, age_eligible==1)
+filtered_design_wr2 <- subset(svy_ocv_r2, age_eligible==1)
+filtered_design_wr3 <- subset(svy_ocv_r3, age_eligible==1)
+
+# Weighted counts of vaccination status by age
+counts_wr1 <- svytotal(~n_dose1plus, filtered_design_wr1, na.rm = TRUE)
+counts_wr2 <- svytotal(~n_dose1plus, filtered_design_wr2, na.rm = TRUE)
+counts_wr3 <- svytotal(~n_dose1plus, filtered_design_wr3, na.rm = TRUE)
+
+# Weighted proportions of vaccination status by age
+props_wr1 <- svyby(~n_dose1plus, ~wealth_quintile, filtered_design_wr1, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose1plus - qnorm(0.975)*se,
+      upper_bound=  n_dose1plus + qnorm(0.975)*se)
+                                                                                            
+props_wr2 <- svyby(~n_dose1plus, ~wealth_quintile, filtered_design_wr2, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose1plus - qnorm(0.975)*se,
+      upper_bound=  n_dose1plus + qnorm(0.975)*se)
+
+props_wr3 <- svyby(~n_dose1plus, ~wealth_quintile, filtered_design_wr3, FUN = svymean, na.rm = TRUE) %>% mutate(lower_bound= n_dose1plus - qnorm(0.975)*se,
+      upper_bound=  n_dose1plus + qnorm(0.975)*se)
+
+# Chi-squared test with weighted data in each round
+table_r1 <- svytable(~ n_dose1plus + wealth_quintile, design = filtered_design_wr1)
+result_r1 <- chisq.test(table_r1)
+print(result_r1)
+
+table_r2 <- svytable(~ n_dose1plus + wealth_quintile, design = filtered_design_wr2)
+result_r2 <- chisq.test(table_r2)
+print(result_r2)
+
+table_r3 <- svytable(~ n_dose1plus + wealth_quintile, design = filtered_design_wr3)
+result_r3 <- chisq.test(table_r3)
+print(result_r3)
+
+```
+
+```{r vax confidence}
+## Overview question: why did the person not receive cholera vaccine? Select all that apply
+tabyl(master$reasons_sideeffects)
+tabyl(master$reasons_ineffective)
+tabyl(master$reasons_away)
+tabyl(master$reasons_avenue)
+tabyl(master$reasons_home)
+tabyl(master$reasons_trust_hs)
+tabyl(master$reasons_decision)
+tabyl(master$reasons_religion)
+tabyl(master$reasons_fertility)
+tabyl(master$reasons_infectious)
+tabyl(master$reasons_eligible)
+tabyl(master$reasons_other)
+tabyl(master$reasons_idk)
+
+## To what extent do you agree with the following statements: I will probably get sick with cholera
+
+# Dropping NAs since these were only asked to adult
+likely <- master %>% filter(round==2) %>% tabyl(cat_get_sick, n_dose1plus,show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns()
+
+# Test for differences
+chisq.test(master$cat_get_sick, master$n_dose1plus)
+
+likely_table <- flextable(likely)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_get_sick = "I will probably get sick with cholera", 
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+
+likely_table
+
+## To what extent do you agree with the following statements: Getting sick with cholera can be serious
+
+# Dropping NAs since these were only asked to adult
+serious <- master %>% filter(round==2) %>% tabyl(cholera_serous, n_dose1plus , show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+adorn_ns()
+
+# Test for differences
+chisq.test(master$cholera_serous, master$n_dose1plus)
+
+serious_table <- flextable(serious)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cholera_serous = "Getting sick with cholera can be serious", 
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+
+serious_table
+
+## How important do you think getting a cholera vaccine is to protect yourself against cholera? Would you say:
+
+# Dropping NAs since these were only asked to adult
+important <- master %>% filter(round==2) %>% tabyl(cat_ocv_self_protection, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns()
+
+# Test for differences
+chisq.test(master$cat_ocv_self_protection, master$n_dose1plus)
+
+important_table <- flextable(important)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_ocv_self_protection= "How important is cholera vaccine to protect you against cholera?", 
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+
+important_table
+
+## How safe do you think a cholera vaccine will be for you? NOTE this is only asked to those who weren't vaccinated. 
+
+# Dropping NAs since these were only asked to adult
+safety <- master %>% filter(round==2) %>% tabyl(cat_ocv_future_safety, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns()
+
+safety_table <- flextable(safety)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_ocv_future_safety= "How safe do you think a cholera vaccine will be for you?", 
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit()
+
+safety_table
+
+## How concerned are you that a cholera vaccine could cause you to have a serious reaction? (Serious means you would not be able to perform your normal daily activities). Would you say…
+
+# Dropping NAs since these were only asked to adult
+reaction <- master %>% filter(round==2) %>% tabyl(cat_ocv_safety_harms,n_dose1plus,show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns()
+
+# Test for differences
+chisq.test(master$cat_ocv_safety_harms, master$n_dose1plus)
+
+reaction_table <- flextable(reaction)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_ocv_safety_harms= "How concerned are you that a cholera vaccine could cause you to have a serious reaction?", 
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+reaction_table
+
+## How much do you trust the public health agencies that recommend the cholera vaccine?
+
+# Dropping NAs since these were only asked to adult
+trust_agency <- master %>% filter(round==2) %>%  tabyl(cat_trust_in_ocv_ph_agencies, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+     adorn_ns()
+
+
+# Test for differences in 0 vs 1+ doses 
+chisq.test(master$cat_trust_in_ocv_ph_agencies, master$n_dose1plus)
+
+trust_agency_table <- flextable(trust_agency)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_ocv_trust= "How much do you trust the agencies recommending the cholera vaccine?",
+      "0" = "Unvaccinated",
+       "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit()
+
+trust_agency_table
+
+
+## If you had to guess, about how many of your family and friends have received a cholera vaccine?
+
+normative_fam <- master %>% filter(round==2) %>% tabyl(cat_family_and_friends_vaccineted, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns() %>% rename("0_fam"="0", "1_fam"="1", "cat"="cat_family_and_friends_vaccineted")
+
+# Test for differences
+chisq.test(master$cat_family_and_friends_vaccineted, master$n_dose1plus)
+
+## If you had to guess, about how many of your community leaders or religious leaders have received a cholera vaccine?
+
+normative_comm<- master %>% tabyl(cat_community_norms, n_dose1plus,show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns() %>% rename("0_comm"="0", "1_comm"="1", "cat"="cat_community_norms")
+
+# Test for differences
+chisq.test(master$cat_community_norms, master$n_dose1plus)
+
+normative_full <- normative_fam %>% full_join(normative_comm)
+
+normative_table <- flextable(normative_full)  %>%
+  add_header_row(
+    top = TRUE,
+    values = c("",
+               "Family and friends",
+               "",
+               "Community leaders and religous leaders",
+               "")) %>% 
+  set_header_labels(         # Rename the columns in original header row
+      cat = "",
+      "0_fam" = "Unvaccinated",
+      "1_fam" = "Vaccinated",
+            "0_comm" = "Unvaccinated",
+      "1_comm" = "Vaccinated") %>%  merge_at(i = 1, j = 2:3, part = "header") %>% merge_at(i = 1, j = 4:5, part = "header") %>% flextable::align(align = "center", part = "all") %>% autofit()
+
+normative_table
+
+## Have you seen or heard any rumors about cholera vaccines?
+master %>% tabyl(ind_ocv_rumors, n_dose1plus,show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+    adorn_ns()
+
+master %>% tabyl(ind_ocv_rumors)
+
+# Test for differences in 0 vs 1+ doses 
+chisq.test(master$ind_ocv_rumors, master$n_dose1plus)
+
+## Where/how did you see or hear rumors about cholera vaccines? Select all that apply
+tabyl(master$rumors_radio) 
+tabyl(master$rumors_phone) 
+tabyl(master$rumors_paper)
+tabyl(master$rumors_web) 
+tabyl(master$rumors_social)
+tabyl(master$rumors_whatsapp)
+tabyl(master$rumors_mobile)
+tabyl(master$rumors_worship)
+tabyl(master$rumors_work)
+tabyl(master$rumors_hc)
+tabyl(master$rumors_community_meetings)
+tabyl(master$rumors_family)
+tabyl(master$rumors_other_hh)
+tabyl(master$rumors_school)
+tabyl(master$rumors_neighborhood)
+tabyl(master$rumors_other)
+tabyl(master$rumors_idk)
+
+## Select your top 3 most trusted sources of information about cholera vaccines:
+
+tabyl(master, sources_politic, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_ph_authorities, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+#Test for differences
+chisq.test(master$sources_ph_authorities, master$n_dose1plus)
+
+tabyl(master, sources_providers, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+#Test for differences
+chisq.test(master$sources_providers, master$n_dose1plus)
+
+tabyl(master, sources_school, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_pharm, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_fam, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_community, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_religion, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_hz, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+#Test for differences
+chisq.test(master$sources_hz, master$n_dose1plus)
+
+tabyl(master, sources_news, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_social, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_whatsapp, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_other, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+tabyl(master, sources_idk, n_dose1plus, show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns() 
+
+info <- master %>% tabyl(cat_sources_clean, n_dose1plus,show_na=FALSE) %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>%
+   adorn_ns()
+
+# Test for differences
+ chisq.test(master$cat_sources_clean, master$n_dose1plus)
+
+## If there is an additional vaccination campaign in your area, how likely are you to take the cholera vaccine?
+
+ campaign <- master %>% tabyl(cat_ocv_intentions, n_dose1plus, show_na=FALSE)  %>% adorn_percentages("col") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns()
+
+# Test for differences
+chisq.test(master$cat_ocv_intentions, master$n_dose1plus)
+
+campaign_table <-  flextable(campaign)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_ocv_intentions = "", 
+      "0" = "Unvaccinated", 
+      "1" = "Vaccinated") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+
+campaign_table
+
+# Intentions by neighborhood
+campaign_neighb <- master %>% filter(n_dose1plus==0) %>% tabyl(cat_quartier, cat_ocv_intentions_bin2, show_na=FALSE) %>% adorn_percentages("row") %>% adorn_pct_formatting(digits = 0) %>% adorn_ns()
+
+# Test for differences in 0 vs 1+ doses 
+chisq.test(master$cat_quartier, master$n_dose1plus)
+
+campaign_neighb_table <-  flextable(campaign_neighb)  %>%
+  set_header_labels(         # Rename the columns in original header row
+      cat_quartier = "Health Area", 
+      "Very or moderately likely" = "Very or moderately likely", 
+      "Little likely" = "Little likely", 
+      "Not at all likely" = "Not at all likely", 
+      "Not sure" = "Not sure") %>% flextable::align(align = "center", part = "all") %>% autofit() 
+
+campaign_neighb_table
+ 
+```
+
+```{r loading_shp, include=FALSE}
+library(here)
+library(sf)
+
+# Loading the shape file for health areas
+health_area <- read_sf(here::here("data", "shape_files", "health_areas_uvira", "health_areas_uvira.shp")) %>% st_as_sf
+
+## adding centroids geoms to this for plotting labels later
+health_area$geom2 <- st_centroid(st_geometry(health_area))
+
+# Creating a signle polygon shape file for Uvira
+# Issue with coordinate system here
+# Want this for all: ID["EPSG",32735]]
+
+uvira <- health_area %>%
+         st_as_sf()%>%
+         st_union()%>%
+         st_transform(., crs = 32735)
+
+
+# Loading shape file for quartiers (neigborhoods)
+address <- readRDS(here::here("data", "shape_files", "address", "shp.rds"))
+
+new_crs <- st_crs("+init=EPSG:32735")
+
+address <- st_transform(address, crs = new_crs)
+
+
+address$geom2 <- st_centroid(st_geometry(address))
+
+# get shapefiles at avenue/quartier/aire de santé levels
+# merge polygons by avenue, quartier, aire de santé
+shp_avenue <- address %>% 
+    group_by(name) %>%
+    summarise(geometry = sf::st_union(geometry)) %>% st_transform(., crs = 32735) %>% ungroup()
+
+shp_quartier <- address %>% 
+    group_by(Quartier) %>%
+    summarise(geometry = sf::st_union(geometry)) %>% st_transform(., crs = 32735) %>% ungroup()
+
+shp_aire <- address %>% 
+    group_by(aire_sante) %>%
+    summarise(geometry = sf::st_union(geometry)) %>% st_transform(., crs = 32735) %>% ungroup()
+
+uvira2 <- shp_quartier %>%
+         st_as_sf()%>%
+         st_union()%>%
+         st_transform(., crs = 32735)
+
+survey1_sf <- master %>%
+               sf::st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326)
+
+survey1_sf <- st_transform(survey1_sf, crs=st_crs(health_area))
+
+## Join survey data with health areas shape files
+df_survey_h_area <- health_area %>%
+                    sf::st_join(survey1_sf, join = st_intersects)
+
+### Total number of individuals enrolled per health area
+enrolled_h_area<- df_survey_h_area %>%
+                       st_drop_geometry() %>%
+                       dplyr::count(NOM_AS, name = "total_h_area")
+
+#### Calculating the coverage of one dose of the OCV by health area
+df_cov_one_dose_h_area <- df_survey_h_area %>%
+                          st_drop_geometry()%>%
+                          filter(n_dose1plus==1)%>%
+                          dplyr::count(NOM_AS, name = "vaccinated_h_area") %>%
+                          select(NOM_AS, vaccinated_h_area)%>%
+                          right_join(enrolled_h_area) %>%
+                          mutate(one_dose_h_area = round(vaccinated_h_area*100/total_h_area, 1))%>%
+                          group_by(NOM_AS)
+
+df_one_dose_h_area <- right_join(df_survey_h_area, df_cov_one_dose_h_area)%>%
+                      group_by(NOM_AS)%>%
+                      dplyr::summarise(coverage_one_dose_h_area=mean(one_dose_h_area))
+
+```
+
+```{r gam_data_prep}
+
+dat <- survey1_sf %>% mutate(Latitude = unlist(map(geometry,2)),
+                             Longitude = unlist(map(geometry,1)))
+
+coord <- matrix(c(dat$Longitude, dat$Latitude), ncol=2)
+
+library(sp)
+library(rgdal)
+library(sf)
+library(mgcv)
+
+data_gam <- SpatialPointsDataFrame(coords=coord, data=data.frame(master)) %>% st_as_sf()
+
+dat_map_sum_sp <- st_as_sf(data_gam,coords=c("Longitude","Latitude"),crs=st_crs(health_area))
+dat_map_sum_sp <- sf::st_set_crs(dat_map_sum_sp, "EPSG:4326") # changed this
+dat_map_sum_sp$x <- st_coordinates(dat_map_sum_sp)[,1]
+dat_map_sum_sp$y <- st_coordinates(dat_map_sum_sp)[,2]
+
+# making grid for predictions
+my_grid <- st_as_sf(st_make_grid(uvira, cellsize = 100, square = TRUE))
+
+sampling_locs_r1 <- sf::st_as_sf(dat %>% filter(!is.na(Latitude), round==1)  %>% dplyr::select(Longitude, Latitude), coords = c("Longitude","Latitude"),crs="+proj=longlat +datum=WGS84 +no_defs") %>% unique()
+
+sampling_locs_r2 <- sf::st_as_sf(dat %>% filter(!is.na(Latitude), round==2)  %>% dplyr::select(Longitude, Latitude), coords = c("Longitude","Latitude"),crs="+proj=longlat +datum=WGS84 +no_defs") %>% unique()
+
+sampling_locs_r3 <- sf::st_as_sf(dat %>% filter(!is.na(Latitude), round==3)  %>% dplyr::select(Longitude, Latitude), coords = c("Longitude","Latitude"),crs="+proj=longlat +datum=WGS84 +no_defs") %>% unique()
+
+sampling_locs_r1 <- st_transform(sampling_locs_r1, crs=32735)
+sampling_locs_r2 <- st_transform(sampling_locs_r2, crs=32735)
+sampling_locs_r3 <- st_transform(sampling_locs_r3, crs=32735)
+
+grid_cents <- my_grid 
+grid_cents$Centroid_X <- st_coordinates(st_centroid(grid_cents))[,1]
+grid_cents$Centroid_Y <- st_coordinates(st_centroid(grid_cents))[,2]
+grid_cents$x <- grid_cents$Centroid_X
+grid_cents$y <- grid_cents$Centroid_Y
+grid_cents <-st_as_sf(as.data.frame(grid_cents), coords=c("Centroid_X", "Centroid_Y"), crs=32735)
+
+# Make a separate dataset for each round
+gam_data_r1 <- dat_map_sum_sp %>% filter(round==1)
+gam_data_r2 <- dat_map_sum_sp %>% filter(round==2)
+gam_data_r3 <- dat_map_sum_sp %>% filter(round==3)
+
+# Determine the association between x/y coordinates and vaccination status in the sampled households
+gam1 <- gam(n_dose1plus ~ s(x) + s(y), data=gam_data_r1, family=binomial("logit"))
+gam2 <- gam(n_dose1plus ~ s(x) + s(y), data=gam_data_r2, family=binomial("logit"))
+gam3 <- gam(n_dose1plus ~ s(x) + s(y), data=gam_data_r3, family=binomial("logit"))
+
+summary(gam1)
+summary(gam2)
+summary(gam3)
+
+# Use the estimated association above to predict vaccination status in all grid cells
+gam_pred1 <- predict(gam1, newdata = grid_cents, type = "response")
+gam_pred2 <- predict(gam2, newdata = grid_cents, type = "response")
+gam_pred3 <- predict(gam3, newdata = grid_cents, type = "response")
+
+summary(gam_pred1)
+summary(gam_pred2)
+summary(gam_pred3)
+
+my_grid$gam_pred1 <- gam_pred1
+my_grid$gam_pred2 <- gam_pred2
+my_grid$gam_pred3 <- gam_pred3
+
+trimmed_preds <- st_intersection(my_grid, uvira)
+
+library(ggsn)
+library(colorspace)
+
+# Round 1
+gg_gam_map1 <- ggplot() +
+  geom_sf(data=health_area, color="black", lwd=0.38) +
+  geom_sf(data = trimmed_preds, aes(fill = gam_pred1*100), color=NA,lwd = 0, alpha=0.9) +
+  geom_sf(data = uvira, fill = NA, lwd = 0.5) +
+  geom_sf(data = sampling_locs_r1, color = 'black', pch=3,size = 0.5,alpha=.2) +
+  coord_sf(datum = NA)  +
+  labs(x = "") +
+  labs(y = "") +
+  theme_void()+ 
+  theme(legend.key.size = unit(1.0, 'cm'),
+                                legend.text=element_text(size=15),
+                                legend.title=element_text(size=15),
+                                plot.title = element_text(hjust = 0.5)) +
+    scale_fill_distiller(palette = "PuRd", direction = -1, name="At least 1 dose", limits=c(0,100))  + theme(legend.position = "none") + labs(title = "Round 1")  
+
+ggsave(filename = "ocv_coverage_predict1.png", bg="white", last_plot(), path = here::here())
+
+
+# Round 2 
+gg_gam_map2 <- ggplot() +
+  geom_sf(data=health_area, color="black", lwd=0.38) +
+  geom_sf(data = trimmed_preds, aes(fill = gam_pred2*100), color=NA,lwd = 0, alpha=0.9) +
+  geom_sf(data = uvira, fill = NA, lwd = 0.5) +
+  geom_sf(data = sampling_locs_r2, color = 'black', pch=3,size = 0.5,alpha=.2) +
+  coord_sf(datum = NA)  +
+  labs(x = "") +
+  labs(y = "") +
+  theme_void()+ 
+  theme(legend.key.size = unit(1.0, 'cm'),
+                                legend.text=element_text(size=15),
+                                legend.title=element_text(size=15),
+                                plot.title = element_text(hjust = 0.5)) +
+  scale_fill_distiller(palette = "PuRd",direction = -1, name="At least 1 dose", limits=c(0,100))  + theme(legend.position = "none") + labs(title = "Round 2")  
+
+ggsave(filename = "ocv_coverage_predict2.png", bg="white", last_plot(), path = here::here())
+
+# Round 3
+gg_gam_map3 <- ggplot() +
+  geom_sf(data=health_area, color="black", lwd=0.38) +
+  geom_sf(data = trimmed_preds, aes(fill = gam_pred3*100), color=NA,lwd = 0, alpha=0.9) +
+  geom_sf(data = uvira, fill = NA, lwd = 0.5) +
+  geom_sf(data = sampling_locs_r3, color = 'black', pch=3,size = 0.5,alpha=.2) +
+  coord_sf(datum = NA)  +
+  labs(x = "") +
+  labs(y = "") +
+  theme_void()+ 
+  theme(legend.key.size = unit(0.5, 'cm'),
+                                legend.text=element_text(size=10),
+                                legend.title=element_text(size=10),
+        plot.title = element_text(hjust = 0.5)) +
+  scale_fill_distiller(palette = "PuRd",direction = -1, name="At least 1 dose", limits=c(0,100)) + labs(title = "Round 3") 
+
+ggsave(filename = "ocv_coverage_predict3.png", bg="white", last_plot(), path = here::here()) 
+# Combine the 3 maps
+library(patchwork)
+library(ggspatial)
+
+full_plot <- gg_gam_map1 + gg_gam_map2 + gg_gam_map3 + annotation_north_arrow(which_north="true", location="br", height = unit(1.0, "cm"),
+  width = unit(1.0, "cm"), pad_x = unit(0.25, "cm"),
+  pad_y = unit(0.25, "cm"))
+
+full_plot
+
+ggsave(filename = "ocv_coverage_predict_allrounds.png", bg="white", last_plot(), path = here::here())
+
+```
+
+
+```{r pop movement}
+
+r1_house <- r1_house %>% mutate(year_living_here = year(dt_living_here))
+
+r1_house <- r1_house %>% 
+  mutate(member_lastyear = amt_currentindividuals + amt_pastindividuals - amt_newindividuals)
+
+r2_house <- r2_house %>% 
+  mutate(member_lastyear = amt_currentindividuals + amt_pastindividuals - amt_newindividuals)
+
+r3_house <- r3_house %>% 
+  mutate(member_lastyear = amt_currentindividuals + amt_pastindividuals - amt_newindividuals)
+
+prop_out1 <- round(sum(r1_house$amt_pastindividuals) / sum(r1_house$member_lastyear) * 100, 1)
+prop_in1 <- round(sum(r1_house$amt_newindividuals) / sum(r1_house$member_lastyear) * 100, 1)
+net_migr1 <- round(sum(r1_house$amt_newindividuals - r1_house$amt_pastindividuals) / sum(r1_house$member_lastyear) * 100, 1)
+
+prop_out2 <- round(sum(r2_house$amt_pastindividuals) / sum(r2_house$member_lastyear) * 100, 1)
+prop_in2 <- round(sum(r2_house$amt_newindividuals) / sum(r2_house$member_lastyear) * 100, 1)
+net_migr2 <- round(sum(r2_house$amt_newindividuals - r2_house$amt_pastindividuals) / sum(r2_house$member_lastyear) * 100, 1)
+
+prop_out3 <- round(sum(r3_house$amt_pastindividuals) / sum(r3_house$member_lastyear) * 100, 1)
+prop_in3 <- round(sum(r3_house$amt_newindividuals) / sum(r3_house$member_lastyear) * 100, 1)
+net_migr3 <- round(sum(r3_house$amt_newindividuals - r3_house$amt_pastindividuals) / sum(r3_house$member_lastyear) * 100, 1)
+
+```
+
+```{r decay 1 dose}
+# Load libraries
+library(cmdstanr)
+library(bayesplot)
+
+file <- file.path(here("notebooks/uvira_pop_movement/population_movement_v3.stan"))
+mod <- cmdstan_model(file) 
+
+# Define the number of age groups
+num_age_groups <- 6 # decision to remove the <1 category on Dec 23
+num_groups <- num_age_groups
+num_surveys <- 3  # Number of survey rounds
+age_categories <- 1:num_age_groups
+
+# Define the time values for each survey round
+time_round1 <- 11
+time_round2 <- 18
+time_round3 <- 29
+
+# Construct the t variable
+t <- matrix(rep(c(time_round1, time_round2, time_round3), each = num_groups), nrow = num_surveys, ncol = num_groups, byrow = TRUE)
+
+# Define the coverage rates for each age group and survey round
+# One or more doses of OCV
+coverage <- matrix(c(
+  # Round 1: Coverage for each age group
+  0.57, 0.63, 0.57, 0.53, 0.51, 0.48,
+  # Round 2: Coverage for each age group
+  0.48, 0.59, 0.50, 0.43, 0.50, 0.45,
+  # Round 3: Coverage for each age group
+  0.46, 0.48, 0.41, 0.38, 0.40, 0.44), nrow=num_surveys, ncol=num_groups, byrow=TRUE)
+
+# Define the population sizes for each age group based 
+# on census data in that survey round
+population_sizes <- matrix(c(
+  # Round 1: 6 age groups. Census from 2021
+ (14652119), (16294305), (24554072), (24015985), (12739523), (8777814),
+  # Round 2: 6 age groups. Census from 2022
+ (15017237), (16609090), (25589879), (24764164), (13237658), (9092663),
+  # Round 3: 6 age groups. Census from 2023
+ (15378752), (16965832), (26627701), (25519326), (13755051), (9427524)), nrow=num_surveys, ncol=num_groups, byrow=TRUE)
+
+# Define the number of sampled individuals for each age group and survey round
+sampled_individuals <- matrix(c(
+  # Round 1
+  354, 405, 642, 438, 210, 180,
+  # Round 2
+  569, 585, 972, 641, 326, 250,
+  # Round 3
+  439, 514, 759, 446, 244, 160), nrow = 3, ncol = num_groups, byrow = TRUE)
+
+# Compute the number vaccinated for each age/sex group and survey round
+num_vaccinated <- coverage*sampled_individuals
+
+# Create data_list with age, sex, and population size information
+data_list <- list(
+  S = num_surveys,  # Number of survey rounds
+  G = num_groups,  # Number of age/sex groups
+  v = num_vaccinated ,  # Number vaccinated in each age group
+  n = sampled_individuals,  # Number of sampled individuals for each age/sex group and survey round
+  t = t,  # Time since vaccination for each agex group and survey round
+  N = population_sizes  # Population size for each age group
+)
+
+# Run the Stan model
+fit <- mod$sample(
+  data = data_list,
+  seed = 123,
+  chains = 4,
+  parallel_chains = 4,
+  refresh = 500  # Print update every 500 iterations
+)
+
+draws <- fit$draws(format = "df")
+mcmc_hist(fit$draws("lambda"))
+predicted_coverage <- fit$draws("coverage", format = "df")
+
+#make into long format and parse the time from the coverage column names
+predicted_coverage <- predicted_coverage %>%
+  pivot_longer(cols = starts_with("coverage"), names_to = "group", values_to = "coverage")
+
+# pull out time and group variables
+predicted_coverage <- predicted_coverage %>%
+  mutate(
+    time = as.numeric(str_extract(group, "(?<=\\[)[^,]+")),
+    group = as.integer(str_extract(group, "(?<=,)[^\\]]+"))
+  )
+
+quantiles_per_time <- predicted_coverage |>
+  group_by(time, group) |>
+  summarise(q2_5 = quantile(coverage, probs = 0.025, na.rm=TRUE),
+            q5 = quantile(coverage, probs = 0.05, na.rm=TRUE),
+            q25 = quantile(coverage, probs = 0.25, na.rm=TRUE),
+            q50 = quantile(coverage, probs = 0.5, na.rm=TRUE),
+            q75 = quantile(coverage, probs = 0.75, na.rm=TRUE),
+            q95 = quantile(coverage, probs = 0.95, na.rm=TRUE),
+            q975 = quantile(coverage, probs = 0.975, na.rm=TRUE))
+
+quantiles_per_time$group <- factor(quantiles_per_time$group)
+
+# Create an overall coverage 
+# Define the population sizes for each age group. Overall, across all 3 survey rounds
+population_sizes <- c(1362, 1504, 2373, 1525, 780, 590)
+
+# Calculate the weighted average coverage decline for each time point
+coverage_overall <- quantiles_per_time %>%
+  group_by(time) %>%
+  summarise(weighted_average = sum(q50 * population_sizes) / sum(population_sizes))
+
+# Try merging back in the weighted average for each time point 
+quantiles_per_time <- quantiles_per_time %>% inner_join(coverage_overall, by = c("time" = "time"))
+
+# Calculate standard error
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    standard_error = sqrt(
+      sum((q50 - weighted_average)^2 * population_sizes) /
+        (sum(population_sizes) * (length(population_sizes) - 1))))
+
+
+# Calculate t-score for the desired confidence level (e.g., 95%)
+confidence_level <- 0.95
+t_score = qt((1 + confidence_level) / 2, df = length(population_sizes) - 1)
+
+# Calculate margin of error
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    margin_of_error = t_score * standard_error)
+
+# Calculate lower and upper bounds of the confidence interval
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    lower_ci = weighted_average - margin_of_error,
+    upper_ci = weighted_average + margin_of_error)
+
+coverage_overall_final <- quantiles_per_time %>% distinct(time, weighted_average, .keep_all = TRUE) %>% select(time, weighted_average, lower_ci, upper_ci)
+
+# Create overall coverage points
+# Remove those <1 
+coverage_master <- master  %>% filter(is.na(n_dose1plus)==FALSE) %>% filter(age_cat_elig3!="-1.762-0") %>% 
+  filter(is.na(age_cat_elig3)==FALSE) %>% group_by(time_since) %>%
+  summarize(mean_coverage= mean(n_dose1plus))
+
+# Create age-specific coverage points
+coverage_master_age <- master %>% filter(is.na(n_dose1plus)==FALSE) %>% filter(age_cat_elig3!="-1.762-0") %>% 
+  filter(is.na(age_cat_elig3)==FALSE) %>% group_by(age_cat_elig3, time_since) %>%
+  summarize(mean_coverage= mean(n_dose1plus)) %>% mutate(group=case_when(
+    age_cat_elig3=="1-4" ~ 1,
+    age_cat_elig3=="5-9" ~ 2,
+    age_cat_elig3=="10-19" ~ 3,
+    age_cat_elig3=="20-34" ~ 4,
+    age_cat_elig3=="35-49" ~ 5,
+    age_cat_elig3=="50+" ~ 6,
+    TRUE ~ NA_real_))
+
+coverage_master_age$group <- factor(coverage_master_age$group)
+
+# Overall coverage decline with points
+plot_points <- ggplot(data = coverage_overall_final, aes(x = time, y = weighted_average)) +
+  geom_point(data = coverage_master, aes(x = time_since, y = mean_coverage), size=3, alpha=0.7) +
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.3, fill = "gray", linewidth=0.1) +
+  geom_line(aes(x = time, y = weighted_average)) +
+  labs(x = "Months post-vaccination", y = "At least 1-dose coverage", title = "") +
+  geom_vline(xintercept = data_list$t[1], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[2], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[3], linetype = "dashed") + theme_minimal() + ylim(0, 1.0)
+
+plot_points
+
+# Scale points based on population size
+coverage_master_age <- coverage_master_age %>% mutate(pop_size = case_when(
+  time_since==11 & group==1 ~ 354, 
+  time_since==11 & group==2 ~ 405, 
+  time_since==11 & group==3 ~ 642, 
+  time_since==11 & group==4 ~ 438, 
+  time_since==11 & group==5 ~ 210, 
+  time_since==11 & group==6 ~ 180, 
+  time_since==18 & group==1 ~ 569,
+  time_since==18 & group==2 ~ 585,
+  time_since==18 & group==3 ~ 972,
+  time_since==18 & group==4 ~ 641,
+  time_since==18 & group==5 ~ 326,
+  time_since==18 & group==6 ~ 250,
+  time_since==29 & group==1 ~ 439,
+  time_since==29 & group==2 ~ 514,
+  time_since==29 & group==3 ~ 759,
+  time_since==29 & group==4 ~ 446,
+  time_since==29 & group==5 ~ 244,
+  time_since==29 & group==6 ~ 160,
+  TRUE ~ NA ))
+
+plot_points_age_scaled <- ggplot(data = quantiles_per_time, aes(x = time, y = q50, color = group)) +
+  geom_ribbon(aes(ymin = q2_5, ymax = q975), alpha = 0.3, fill = "gray", linewidth=0.1) +
+  geom_line(aes(x = time, y = q50)) +
+  labs(x = "Months post-vaccination", y = "At least 1-dose coverage", title = "") +
+  geom_vline(xintercept = data_list$t[1], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[2], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[3], linetype = "dashed") +
+  scale_color_discrete(name = "Age at time of campaign", labels = c("1-4", "5-9", "10-19", "20-34", "35-49", "50+")) +
+  scale_size_continuous(name = "Sampled population size") +  
+  geom_point(data = coverage_master_age, aes(x = time_since, y = mean_coverage, size = pop_size)) +
+  geom_point(data = coverage_master_age, aes(x = time_since, y = mean_coverage, color = group, size = pop_size), alpha=0.7) +
+  theme_minimal() + theme(legend.position = "bottom",
+                          legend.key.size = unit(0.3, "lines"),  # Adjust key size
+                          legend.text = element_text(size = 5),  # Adjust text size
+                          legend.title = element_text(size = 6)  # Adjust title size 
+                          ) + ylim(0, 1.0) + guides(color = guide_legend(order = 2), size = guide_legend(order = 1))
+
+plot_points_age_scaled
+
+# Put the plots together
+library(patchwork)
+full1 <- plot_points + plot_points_age_scaled
+
+# Estimate age-specific average decay rate by analyzing posterior distribution of the estimated lambda parameter
+
+# Calculate summary statistics
+median_lambda_1 <- median(draws$'lambda[1]')
+mean_lambda_1 <- mean(draws$'lambda[1]')
+credible_interval_lambda_1 <- quantile(draws$'lambda[1]', c(0.025, 0.975))
+
+median_lambda_2 <- median(draws$'lambda[2]')
+mean_lambda_2 <- mean(draws$'lambda[2]')
+credible_interval_lambda_2 <- quantile(draws$'lambda[2]', c(0.025, 0.975))
+
+median_lambda_3 <- median(draws$'lambda[3]')
+mean_lambda_3 <- mean(draws$'lambda[3]')
+credible_interval_lambda_3 <- quantile(draws$'lambda[3]', c(0.025, 0.975))
+
+median_lambda_4 <- median(draws$'lambda[4]')
+mean_lambda_4 <- mean(draws$'lambda[4]')
+credible_interval_lambda_4 <- quantile(draws$'lambda[4]', c(0.025, 0.975))
+
+median_lambda_5 <- median(draws$'lambda[5]')
+mean_lambda_5 <- mean(draws$'lambda[5]')
+credible_interval_lambda_5 <- quantile(draws$'lambda[5]', c(0.025, 0.975))
+
+median_lambda_6 <- median(draws$'lambda[6]')
+mean_lambda_6 <- mean(draws$'lambda[6]')
+credible_interval_lambda_6 <- quantile(draws$'lambda[6]', c(0.025, 0.975))
+
+# Print summary statistics
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_1[1], "-", credible_interval_lambda_1[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_2[1], "-", credible_interval_lambda_2[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_3[1], "-", credible_interval_lambda_3[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_4[1], "-", credible_interval_lambda_4[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_5[1], "-", credible_interval_lambda_5[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_6[1], "-", credible_interval_lambda_6[2], "\n")
+
+# Estimate yearly decline instead of monthly decline
+mean_lambda_1 = mean_lambda_1*12
+mean_lambda_2 = mean_lambda_2*12
+mean_lambda_3 = mean_lambda_3*12
+mean_lambda_4 = mean_lambda_4*12
+mean_lambda_5 = mean_lambda_5*12
+mean_lambda_6 = mean_lambda_6*12
+
+# Given confidence interval endpoints in months
+lower_ci_per_month1 <- credible_interval_lambda_1[1]
+upper_ci_per_month1 <- credible_interval_lambda_1[2]
+
+lower_ci_per_month2 <- credible_interval_lambda_2[1]
+upper_ci_per_month2 <- credible_interval_lambda_2[2]
+
+lower_ci_per_month3 <- credible_interval_lambda_3[1]
+upper_ci_per_month3 <- credible_interval_lambda_3[2]
+
+lower_ci_per_month4 <- credible_interval_lambda_4[1]
+upper_ci_per_month4 <- credible_interval_lambda_4[2]
+
+lower_ci_per_month5 <- credible_interval_lambda_5[1]
+upper_ci_per_month5 <- credible_interval_lambda_5[2]
+
+lower_ci_per_month6 <- credible_interval_lambda_6[1]
+upper_ci_per_month6 <- credible_interval_lambda_6[2]
+
+# Convert to annual decay rate confidence interval
+lower_ci_per_year1 <- lower_ci_per_month1 * 12
+upper_ci_per_year1 <- upper_ci_per_month1 * 12
+
+lower_ci_per_year2 <- lower_ci_per_month2 * 12
+upper_ci_per_year2 <- upper_ci_per_month2 * 12
+
+lower_ci_per_year3 <- lower_ci_per_month3 * 12
+upper_ci_per_year3 <- upper_ci_per_month3 * 12
+
+lower_ci_per_year4 <- lower_ci_per_month4 * 12
+upper_ci_per_year4 <- upper_ci_per_month4 * 12
+
+lower_ci_per_year5 <- lower_ci_per_month5 * 12
+upper_ci_per_year5 <- upper_ci_per_month5 * 12
+
+lower_ci_per_year6 <- lower_ci_per_month6 * 12
+upper_ci_per_year6 <- upper_ci_per_month6 * 12
+
+# Print the result
+cat("Mean Decay Rate (lambda):", mean_lambda_1, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_2, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_3, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_4, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_5, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_6, "\n")
+
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year1, "-", upper_ci_per_year1, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year2, "-", upper_ci_per_year2, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year3, "-", upper_ci_per_year3, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year4, "-", upper_ci_per_year4, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year5, "-", upper_ci_per_year5, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year6, "-", upper_ci_per_year6, "\n")
+
+# Estimte population overall average decline rate 
+# Define the individual estimates for decline rates from each age group
+mean_estimates <- c(mean_lambda_1, mean_lambda_2, mean_lambda_3,
+                          mean_lambda_4, mean_lambda_5, mean_lambda_6)
+
+overall_decline <- data.frame(mean_estimates) %>% mutate(group=1:6)
+overall_decline_rate_estimate <- sum(mean_estimates * population_sizes) / sum(population_sizes)
+
+overall_decline <- overall_decline %>% mutate(overall_estimate = 0.1929)
+
+# Calculate standard error
+overall_decline <- overall_decline %>%
+  mutate(
+    standard_error = sqrt(
+      sum((mean_estimates - overall_estimate)^2 * population_sizes) /
+        (sum(population_sizes) * (length(population_sizes) - 1))))
+
+# Calculate t-score for the desired confidence level (e.g., 95%)
+confidence_level <- 0.95
+t_score = qt((1 + confidence_level) / 2, df = length(population_sizes) - 1)
+
+# Calculate margin of error
+overall_decline <- overall_decline %>%
+  mutate(
+    margin_of_error = t_score * standard_error)
+
+# Calculate lower and upper bounds of the confidence interval
+overall_decline <- overall_decline %>%
+  mutate(
+    lower_ci = overall_estimate - margin_of_error,
+    upper_ci = overall_estimate + margin_of_error)
+
+```
+
+```{r decay 2 dose}
+
+file <- file.path(here("notebooks/uvira_pop_movement/population_movement_v3.stan"))
+mod <- cmdstan_model(file) 
+
+# Define the number of age groups
+num_age_groups <- 6 # decision to remove the <1 category on Dec 23
+num_groups <- num_age_groups
+num_surveys <- 3  # Number of survey rounds
+age_categories <- 1:num_age_groups
+
+# Define the time values for each survey round
+time_round1 <- 11
+time_round2 <- 18
+time_round3 <- 29
+
+# Construct the t variable
+t <- matrix(rep(c(time_round1, time_round2, time_round3), each = num_groups), nrow = num_surveys, ncol = num_groups, byrow = TRUE)
+
+# Define the coverage rates for each age group and survey round
+# Two or more doses of OCV
+coverage <- matrix(c(
+  # Round 1: Coverage for each age group
+ 0.26, 0.27, 0.21, 0.25, 0.21, 0.21,
+  # Round 2: Coverage for each age group
+ 0.23, 0.24, 0.20, 0.20, 0.22, 0.18,
+    # Round 3: Coverage for each age group
+ 0.11, 0.10, 0.08, 0.10, 0.16, 0.19), nrow=num_surveys, ncol=num_groups, byrow=TRUE)
+
+
+# Define the population sizes for each age group based 
+# on census data in that survey round
+population_sizes <- matrix(c(
+  # Round 1: 6 age groups. Census from 2021
+ (14652119), (16294305), (24554072), (24015985), (12739523), (8777814),
+  # Round 2: 6 age groups. Census from 2022
+ (15017237), (16609090), (25589879), (24764164), (13237658), (9092663),
+  # Round 3: 6 age groups. Census from 2023
+ (15378752), (16965832), (26627701), (25519326), (13755051), (9427524)), nrow=num_surveys, ncol=num_groups, byrow=TRUE)
+
+# Define the number of sampled individuals for each age group and survey round
+sampled_individuals <- matrix(c(
+  # Round 1
+  354, 405, 642, 438, 210, 180,
+  # Round 2
+  569, 585, 972, 641, 326, 250,
+  # Round 3
+  439, 514, 759, 446, 244, 160), nrow = 3, ncol = num_groups, byrow = TRUE)
+
+# Compute the number vaccinated for each age/sex group and survey round
+num_vaccinated <- coverage*sampled_individuals
+
+# Create data_list with age, sex, and population size information
+data_list <- list(
+  S = num_surveys,  # Number of survey rounds
+  G = num_groups,  # Number of age/sex groups
+  v = num_vaccinated ,  # Number vaccinated in each age group
+  n = sampled_individuals,  # Number of sampled individuals for each age/sex group and survey round
+  t = t,  # Time since vaccination for each agex group and survey round
+  N = population_sizes  # Population size for each age group
+)
+
+# Run the Stan model
+fit <- mod$sample(
+  data = data_list,
+  seed = 123,
+  chains = 4,
+  parallel_chains = 4,
+  refresh = 500  # Print update every 500 iterations
+)
+
+draws <- fit$draws(format = "df")
+mcmc_hist(fit$draws("lambda"))
+predicted_coverage <- fit$draws("coverage", format = "df")
+
+#make into long format and parse the time from the coverage column names
+predicted_coverage <- predicted_coverage %>%
+  pivot_longer(cols = starts_with("coverage"), names_to = "group", values_to = "coverage")
+
+# pull out time and group variables
+predicted_coverage <- predicted_coverage %>%
+  mutate(
+    time = as.numeric(str_extract(group, "(?<=\\[)[^,]+")),
+    group = as.integer(str_extract(group, "(?<=,)[^\\]]+"))
+  )
+
+quantiles_per_time <- predicted_coverage |>
+  group_by(time, group) |>
+  summarise(q2_5 = quantile(coverage, probs = 0.025, na.rm=TRUE),
+            q5 = quantile(coverage, probs = 0.05, na.rm=TRUE),
+            q25 = quantile(coverage, probs = 0.25, na.rm=TRUE),
+            q50 = quantile(coverage, probs = 0.5, na.rm=TRUE),
+            q75 = quantile(coverage, probs = 0.75, na.rm=TRUE),
+            q95 = quantile(coverage, probs = 0.95, na.rm=TRUE),
+            q975 = quantile(coverage, probs = 0.975, na.rm=TRUE))
+
+quantiles_per_time$group <- factor(quantiles_per_time$group)
+
+# Create an overall coverage 
+# Define the population sizes for each age group. Overall, across all 3 survey rounds
+population_sizes <- c(1362, 1504, 2373, 1525, 780, 590)
+
+# Calculate the weighted average coverage decline for each time point
+coverage_overall <- quantiles_per_time %>%
+  group_by(time) %>%
+  summarise(weighted_average = sum(q50 * population_sizes) / sum(population_sizes))
+
+# Try merging back in the weighted average for each time point 
+quantiles_per_time <- quantiles_per_time %>% inner_join(coverage_overall, by = c("time" = "time"))
+
+# Calculate standard error
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    standard_error = sqrt(
+      sum((q50 - weighted_average)^2 * population_sizes) /
+        (sum(population_sizes) * (length(population_sizes) - 1))))
+
+
+# Calculate t-score for the desired confidence level (e.g., 95%)
+confidence_level <- 0.95
+t_score = qt((1 + confidence_level) / 2, df = length(population_sizes) - 1)
+
+# Calculate margin of error
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    margin_of_error = t_score * standard_error)
+
+# Calculate lower and upper bounds of the confidence interval
+quantiles_per_time <- quantiles_per_time %>%
+  mutate(
+    lower_ci = weighted_average - margin_of_error,
+    upper_ci = weighted_average + margin_of_error)
+
+coverage_overall_final <- quantiles_per_time %>% distinct(time, weighted_average, .keep_all = TRUE) %>% select(time, weighted_average, lower_ci, upper_ci)
+
+# Create overall coverage points
+# Remove those <1 
+coverage_master <- master  %>% filter(is.na(n_dose2plus)==FALSE) %>% filter(age_cat_elig3!="-1.762-0") %>% 
+  filter(is.na(age_cat_elig3)==FALSE) %>% group_by(time_since) %>%
+  summarize(mean_coverage= mean(n_dose2plus))
+
+# Create age-specific coverage points
+coverage_master_age <- master %>% filter(is.na(n_dose2plus)==FALSE) %>% filter(age_cat_elig3!="-1.762-0") %>% 
+  filter(is.na(age_cat_elig3)==FALSE) %>% group_by(age_cat_elig3, time_since) %>%
+  summarize(mean_coverage= mean(n_dose2plus)) %>% mutate(group=case_when(
+    age_cat_elig3=="1-4" ~ 1,
+    age_cat_elig3=="5-9" ~ 2,
+    age_cat_elig3=="10-19" ~ 3,
+    age_cat_elig3=="20-34" ~ 4,
+    age_cat_elig3=="35-49" ~ 5,
+    age_cat_elig3=="50+" ~ 6,
+    TRUE ~ NA_real_))
+
+coverage_master_age$group <- factor(coverage_master_age$group)
+
+# Overall coverage decline with points
+plot_points <- ggplot(data = coverage_overall_final, aes(x = time, y = weighted_average)) +
+  geom_point(data = coverage_master, aes(x = time_since, y = mean_coverage), size=3, alpha=0.7) +
+  geom_ribbon(aes(ymin = lower_ci, ymax = upper_ci), alpha = 0.3, fill = "gray", linewidth=0.1) +
+  geom_line(aes(x = time, y = weighted_average)) +
+  labs(x = "Months post-vaccination", y = "At least 2-dose coverage", title = "") +
+  geom_vline(xintercept = data_list$t[1], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[2], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[3], linetype = "dashed") + theme_minimal() + ylim(0, 1.0)
+
+plot_points
+
+# Scale points based on population size
+coverage_master_age <- coverage_master_age %>% mutate(pop_size = case_when(
+  time_since==11 & group==1 ~ 354, 
+  time_since==11 & group==2 ~ 405, 
+  time_since==11 & group==3 ~ 642, 
+  time_since==11 & group==4 ~ 438, 
+  time_since==11 & group==5 ~ 210, 
+  time_since==11 & group==6 ~ 180, 
+  time_since==18 & group==1 ~ 569,
+  time_since==18 & group==2 ~ 585,
+  time_since==18 & group==3 ~ 972,
+  time_since==18 & group==4 ~ 641,
+  time_since==18 & group==5 ~ 326,
+  time_since==18 & group==6 ~ 250,
+  time_since==29 & group==1 ~ 439,
+  time_since==29 & group==2 ~ 514,
+  time_since==29 & group==3 ~ 759,
+  time_since==29 & group==4 ~ 446,
+  time_since==29 & group==5 ~ 244,
+  time_since==29 & group==6 ~ 160,
+  TRUE ~ NA ))
+
+plot_points_age_scaled <- ggplot(data = quantiles_per_time, aes(x = time, y = q50, color = group)) +
+  geom_ribbon(aes(ymin = q2_5, ymax = q975), alpha = 0.3, fill = "gray", linewidth=0.1) +
+  geom_line(aes(x = time, y = q50)) +
+  labs(x = "Months post-vaccination", y = "At least 2-dose coverage", title = "") +
+  geom_vline(xintercept = data_list$t[1], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[2], linetype = "dashed") +
+  geom_vline(xintercept = data_list$t[3], linetype = "dashed") +
+  scale_color_discrete(name = "Age at time of campaign", labels = c("1-4", "5-9", "10-19", "20-34", "35-49", "50+")) +
+  scale_size_continuous(name = "Sampled population size") +  
+  geom_point(data = coverage_master_age, aes(x = time_since, y = mean_coverage, size = pop_size)) +
+  geom_point(data = coverage_master_age, aes(x = time_since, y = mean_coverage, color = group, size = pop_size), alpha=0.7) +
+  theme_minimal() + theme(legend.position = "bottom",
+                          legend.key.size = unit(0.3, "lines"),  # Adjust key size
+                          legend.text = element_text(size = 5),  # Adjust text size
+                          legend.title = element_text(size = 6)  # Adjust title size 
+                          ) + ylim(0, 1.0) + guides(color = guide_legend(order = 2), size = guide_legend(order = 1))
+
+plot_points_age_scaled
+
+# Put the plots together
+full_2 <- plot_points + plot_points_age_scaled
+
+# Estimate age-specific average decay rate by analyzing posterior distribution of the estimated lambda parameter
+
+# Calculate summary statistics
+median_lambda_1 <- median(draws$'lambda[1]')
+mean_lambda_1 <- mean(draws$'lambda[1]')
+credible_interval_lambda_1 <- quantile(draws$'lambda[1]', c(0.025, 0.975))
+
+median_lambda_2 <- median(draws$'lambda[2]')
+mean_lambda_2 <- mean(draws$'lambda[2]')
+credible_interval_lambda_2 <- quantile(draws$'lambda[2]', c(0.025, 0.975))
+
+median_lambda_3 <- median(draws$'lambda[3]')
+mean_lambda_3 <- mean(draws$'lambda[3]')
+credible_interval_lambda_3 <- quantile(draws$'lambda[3]', c(0.025, 0.975))
+
+median_lambda_4 <- median(draws$'lambda[4]')
+mean_lambda_4 <- mean(draws$'lambda[4]')
+credible_interval_lambda_4 <- quantile(draws$'lambda[4]', c(0.025, 0.975))
+
+median_lambda_5 <- median(draws$'lambda[5]')
+mean_lambda_5 <- mean(draws$'lambda[5]')
+credible_interval_lambda_5 <- quantile(draws$'lambda[5]', c(0.025, 0.975))
+
+median_lambda_6 <- median(draws$'lambda[6]')
+mean_lambda_6 <- mean(draws$'lambda[6]')
+credible_interval_lambda_6 <- quantile(draws$'lambda[6]', c(0.025, 0.975))
+
+# Print summary statistics
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_1[1], "-", credible_interval_lambda_1[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_2[1], "-", credible_interval_lambda_2[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_3[1], "-", credible_interval_lambda_3[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_4[1], "-", credible_interval_lambda_4[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_5[1], "-", credible_interval_lambda_5[2], "\n")
+
+cat("95% Credible Interval for Decay Rate (lambda):", 
+    credible_interval_lambda_6[1], "-", credible_interval_lambda_6[2], "\n")
+
+# Estimate yearly decline instead of monthly decline
+mean_lambda_1 = mean_lambda_1*12
+mean_lambda_2 = mean_lambda_2*12
+mean_lambda_3 = mean_lambda_3*12
+mean_lambda_4 = mean_lambda_4*12
+mean_lambda_5 = mean_lambda_5*12
+mean_lambda_6 = mean_lambda_6*12
+
+# Given confidence interval endpoints in months
+lower_ci_per_month1 <- credible_interval_lambda_1[1]
+upper_ci_per_month1 <- credible_interval_lambda_1[2]
+
+lower_ci_per_month2 <- credible_interval_lambda_2[1]
+upper_ci_per_month2 <- credible_interval_lambda_2[2]
+
+lower_ci_per_month3 <- credible_interval_lambda_3[1]
+upper_ci_per_month3 <- credible_interval_lambda_3[2]
+
+lower_ci_per_month4 <- credible_interval_lambda_4[1]
+upper_ci_per_month4 <- credible_interval_lambda_4[2]
+
+lower_ci_per_month5 <- credible_interval_lambda_5[1]
+upper_ci_per_month5 <- credible_interval_lambda_5[2]
+
+lower_ci_per_month6 <- credible_interval_lambda_6[1]
+upper_ci_per_month6 <- credible_interval_lambda_6[2]
+
+# Convert to annual decay rate confidence interval
+lower_ci_per_year1 <- lower_ci_per_month1 * 12
+upper_ci_per_year1 <- upper_ci_per_month1 * 12
+
+lower_ci_per_year2 <- lower_ci_per_month2 * 12
+upper_ci_per_year2 <- upper_ci_per_month2 * 12
+
+lower_ci_per_year3 <- lower_ci_per_month3 * 12
+upper_ci_per_year3 <- upper_ci_per_month3 * 12
+
+lower_ci_per_year4 <- lower_ci_per_month4 * 12
+upper_ci_per_year4 <- upper_ci_per_month4 * 12
+
+lower_ci_per_year5 <- lower_ci_per_month5 * 12
+upper_ci_per_year5 <- upper_ci_per_month5 * 12
+
+lower_ci_per_year6 <- lower_ci_per_month6 * 12
+upper_ci_per_year6 <- upper_ci_per_month6 * 12
+
+# Print the result
+cat("Mean Decay Rate (lambda):", mean_lambda_1, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_2, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_3, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_4, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_5, "\n")
+cat("Mean Decay Rate (lambda):", mean_lambda_6, "\n")
+
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year1, "-", upper_ci_per_year1, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year2, "-", upper_ci_per_year2, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year3, "-", upper_ci_per_year3, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year4, "-", upper_ci_per_year4, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year5, "-", upper_ci_per_year5, "\n")
+cat("Annual Decay Rate Confidence Interval:", lower_ci_per_year6, "-", upper_ci_per_year6, "\n")
+
+# Estimte population overall average decline rate 
+# Define the individual estimates for decline rates from each age group
+mean_estimates <- c(mean_lambda_1, mean_lambda_2, mean_lambda_3,
+                          mean_lambda_4, mean_lambda_5, mean_lambda_6)
+
+overall_decline <- data.frame(mean_estimates) %>% mutate(group=1:6)
+overall_decline_rate_estimate <- sum(mean_estimates * population_sizes) / sum(population_sizes)
+
+overall_decline <- overall_decline %>% mutate(overall_estimate = 0.1929)
+
+# Calculate standard error
+overall_decline <- overall_decline %>%
+  mutate(
+    standard_error = sqrt(
+      sum((mean_estimates - overall_estimate)^2 * population_sizes) /
+        (sum(population_sizes) * (length(population_sizes) - 1))))
+
+# Calculate t-score for the desired confidence level (e.g., 95%)
+confidence_level <- 0.95
+t_score = qt((1 + confidence_level) / 2, df = length(population_sizes) - 1)
+
+# Calculate margin of error
+overall_decline <- overall_decline %>%
+  mutate(
+    margin_of_error = t_score * standard_error)
+
+# Calculate lower and upper bounds of the confidence interval
+overall_decline <- overall_decline %>%
+  mutate(
+    lower_ci = overall_estimate - margin_of_error,
+    upper_ci = overall_estimate + margin_of_error)
+
+```
